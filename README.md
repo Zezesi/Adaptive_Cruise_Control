@@ -2,8 +2,7 @@ This repository is dedicated to adaptive cruise control.
 
 MPC_ACC.py: Adaptive cruise control based on MPC.
 
-Results:
-![accel](https://github.com/user-attachments/assets/47db6046-51bf-4f25-b471-6d90c92fcfad)
-![j](https://github.com/user-attachments/assets/46611372-96db-4dec-8b3a-1d396eb6e17c)
-![v](https://github.com/user-attachments/assets/ad905f25-234b-4fcb-913b-251f8422ab70)
-![rdx](https://github.com/user-attachments/assets/8a96414e-588e-4273-bdcd-1f421cda8128)
+Results:![rdx](https://github.com/user-attachments/assets/4e3a2cdc-570d-48e2-a4e8-06ba03740e2a)
+![v](https://github.com/user-attachments/assets/317d9684-3e9a-47c9-8c7e-b0c32d0112eb)
+![accel](https://github.com/user-attachments/assets/a4bafc96-265d-4eaf-8eae-fc38c2b50ae2)
+![j](https://github.com/user-attachments/assets/e9665b47-6099-4ec9-b048-c489668afda2)
