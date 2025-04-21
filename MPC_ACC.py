@@ -23,6 +23,12 @@ Length = Lh + Lt  # vehicle length
 def acc_transition(x, u, no, x_position):
     u=u  # u is the desired acceleration
     ap=no # no is the acceleration of the front vehicle
+    if x[1]<=0.001 and ap[0]<0:
+        ap[0]=0.0
+    if x[2]<=0.001 and x[3]<0:
+        x[3]=0.0
+    if x[2]<=0.001 and u<0:
+        u=0.0
     x_next = np.zeros(5)
     x_next[0] = x[0] + Ts * (x[1]-x[2]+1/2*ap[0]*Ts-1/2*x[3]*Ts)
     x_next[1] = x[1] + Ts * ap[0]
@@ -85,15 +91,15 @@ def read_acceleration_profile():
     mat_file_path = 'wltp3.mat'
     acceleration_profile = loadmat(mat_file_path)
     acceleration_profile = acceleration_profile['accl']
-    return acceleration_profile[0:5000]
+    return acceleration_profile[0:10000]
 
 
 if __name__ == "__main__":
     Ts = 0.1  # sampling time [s]
     N=15 # predict horizon length
     tau = Ts  # time delay [s]
-    v_max = 40.0  # max longitudinal velocity [m/s]
-    v_min = 0.0  # min longitudinal velocity, replaced with soft constraints in case that infeasible solutions caused by the noises
+    v_max = 50.0  # max longitudinal velocity [m/s]
+    v_min = 0.0  # min longitudinal velocity
     u_max = 4.0  # max acceleration
     u_min = -5.0  # max deceleration
     j_max = 8.0 # max jerk to ensure smooth acceleration transition
@@ -173,14 +179,13 @@ if __name__ == "__main__":
     obj += ca.mtimes([state_error_final, P, state_error_final.T])
 
     for i in range(N+1):
-        soft_obj_rdx=1/(ca.exp(acc_states[i, 0]-rdx_min)**2)
-        soft_obj_v=1/(ca.exp(10*(acc_states[i, 2]-v_min))**2)
-        obj += soft_obj_rdx+soft_obj_v
+        soft_obj_rdx=1/(ca.exp(acc_states[i, 0]-rdx_min)**2) # soft function for min stopping distance
+        obj += soft_obj_rdx
 
     opti.minimize(obj)
 
     # state and action constraints
-    opti.subject_to(V<=v_max)
+    opti.subject_to(opti.bounded(v_min,V,v_max))
     opti.subject_to(opti.bounded(u_min, u_opt, u_max))
     opti.subject_to(opti.bounded(u_min, a, u_max))
     opti.subject_to(opti.bounded(j_min, j, j_max))
@@ -230,6 +235,7 @@ if __name__ == "__main__":
             plt.cla()
             current_accel = a_h[-1]
             current_velocity=v_h[-1]
+            current_rdx=rdx_h[-1]
             draw_vehicle(init_x_position[1], plt.gca())
             draw_vehicle(init_x_position[0]+Length, plt.gca())
             plt.grid(True)
@@ -237,7 +243,7 @@ if __name__ == "__main__":
             plt.xlabel('X [m]')
             plt.ylabel('Y [m]')
             plt.title(
-                f'MPC Adaptive Cruise Control | Accel:{current_accel:.3f}m/s^2| Velocity:{current_velocity:.3f}m/s')
+                f'MPC ACC | Relative Distance:{current_rdx:.2f}m| Accel:{current_accel:.2f}m/s^2| Velocity:{current_velocity:.2f}m/s')
             plt.pause(0.001)
 
         # set parameters which are the local reference trajectories, opti.set_value only works for an opti.parameter not an opti.variable
@@ -254,8 +260,8 @@ if __name__ == "__main__":
         # obtain the control input
         u_res = sol.value(opt_controls)
         # print(u_res)
-        u_h.append(u_res[1])
-        next_state,x_position = acc_transition(current_state, u_res[1],no,init_x_position)
+        u_h.append(u_res[0])
+        next_state,x_position = acc_transition(current_state, u_res[0],no,init_x_position)
         no = accel_profile[i]  # initial acceleration of the front vehicle
         i = i + 1
         init_x_position=x_position
@@ -283,6 +289,7 @@ if __name__ == "__main__":
     plt.grid(True)
     plt.title('Relative Distance During Cruising')
     plt.ylabel('Relative Distance [m]')
+    plt.savefig('rdx.jpg')
 
 
     plt.figure(figsize=(10, 5))
@@ -293,20 +300,23 @@ if __name__ == "__main__":
     plt.ylabel('Velocity [m/s]')
     plt.legend()
     plt.tight_layout()
+    plt.savefig('v.jpg')
 
     plt.figure(figsize=(10, 5))
-    plt.plot(time_axis, a_h, 'g-', label='Ego-vehicle Acceleration')
-    plt.plot(time_axis, no_h, 'k--',  label='Front vehicle Acceleration')
+    plt.plot(time_axis, a_h, 'g-', label=f'Ego-vehicle Acceleration,RMS:{np.sqrt(np.mean(np.array(a_h)**2)):.2f}m/s^2')
+    plt.plot(time_axis, no_h, 'k--',  label=f'Front vehicle Acceleration,RMS:{np.sqrt(np.mean(np.array(no_h)**2)):.2f}m/s^2')
     plt.grid(True)
     plt.title('Acceleration During Cruising')
     plt.ylabel('Acceleration [m/s^2]')
     plt.legend()
     plt.tight_layout()
+    plt.savefig('accel.jpg')
 
     plt.figure(figsize=(10, 5))
     plt.plot(time_axis, j_h, 'b-')
     plt.grid(True)
     plt.title('Ego-vehicle Jerk During Cruising')
     plt.ylabel('Jerk [m/s^3]')
+    plt.savefig('j.jpg')
 
     plt.show()
