@@ -20,25 +20,25 @@ Tw = 0.185  # tire width
 Length = Lh + Lt  # vehicle length
 
 
-def acc_transition(x, u, no, x_position):
+def acc_transition(x, u, ap, x_position):
     u=u  # u is the desired acceleration
-    ap=no # no is the acceleration of the front vehicle
-    if x[1]<=0.001 and ap[0]<0:
-        ap[0]=0.0
+    ap=ap # no is the acceleration of the front vehicle
+    if x[1]<=0.001 and ap<0:
+        ap=0.0
     if x[2]<=0.001 and x[3]<0:
         x[3]=0.0
     if x[2]<=0.001 and u<0:
         u=0.0
     x_next = np.zeros(5)
-    x_next[0] = x[0] + Ts * (x[1]-x[2]+1/2*ap[0]*Ts-1/2*x[3]*Ts)
-    x_next[1] = x[1] + Ts * ap[0]
+    x_next[0] = x[0] + Ts * (x[1]-x[2]+1/2*ap*Ts-1/2*x[3]*Ts)
+    x_next[1] = x[1] + Ts * ap
     x_next[2] = x[2] + Ts * x[3]
-    x_next[3] = x[3] - Ts * (x[3]/tau-u/tau)
+    x_next[3] = x[3] + Ts * (u/tau-x[3]/tau)
     x_next[4] = u/tau- x[3]/tau
 
     # traveling distance of the two vehicles
     x_position_next = np.zeros(2)
-    x_position_next[0] = x_position[0]+x[1]*Ts+1/2*ap[0]*Ts**2
+    x_position_next[0] = x_position[0]+x[1]*Ts+1/2*ap*Ts**2
     x_position_next[1] = x_position[1] + x[2]*Ts + 1 / 2 * x[3] * Ts**2
     return x_next, x_position_next
 
@@ -132,7 +132,7 @@ if __name__ == "__main__":
     j = acc_states[:, 4]
 
     # acc states need to be optimized
-    opt_states = opti.variable(N + 1, 4)
+    opt_states = opti.variable(N, 4)
     Dise = opt_states[:, 0]
     Ve= opt_states[:, 1]
     ae = opt_states[:, 2]
@@ -153,33 +153,31 @@ if __name__ == "__main__":
 
     # for assigning opti.variable, must use opti.subject_to; for assigning opti.parameter, use opti.set_value,but not during the optimization process; for others use =
     opti.subject_to(acc_states[0, :] == init_acc_states)
-    opti.subject_to(opt_states[0, 0] == acc_states[0,0] - h*acc_states[0,2]-rdx_min)
-    opti.subject_to(opt_states[0, 1] == acc_states[0,1]-acc_states[0,2])
-    opti.subject_to(opt_states[0, 2:] == acc_states[0, 3:])
     for i in range(N):
         next_acc_states = acc_states[i, :] + f(acc_states[i, :], opt_controls[i],front_accl_signal).T * Ts
         opti.subject_to(acc_states[i + 1, :] == next_acc_states)
-        opti.subject_to(
-            opt_states[i + 1, 0] == acc_states[i + 1, 0] - h*acc_states[i + 1,2] - rdx_min)
-        opti.subject_to(opt_states[i + 1, 1] == acc_states[i + 1, 1] - acc_states[i + 1, 2])
-        opti.subject_to(opt_states[i + 1, 2:] == acc_states[i + 1, 3:])
+        opti.subject_to(opt_states[i,  0] == acc_states[i + 1, 0] - h*acc_states[i + 1,2] - rdx_min)
+        opti.subject_to(opt_states[i , 1] == acc_states[i + 1, 1] - acc_states[i + 1, 2])
+        opti.subject_to(opt_states[i , 2] == acc_states[i + 1, 3])
+        opti.subject_to(opt_states[i , 3] == acc_states[i + 1, 4])
 
     # weight matrix
     Q = np.diag([1e2, 1e2, 1e1, 1e1])
-    P = np.diag([1e2, 1e2, 1e1, 1e1])
+    # reduce the acceleration is the same as reducing the control action in this case, so R is optional here
+    R = np.diag([1e1])
 
 
 
     # cost function
+    # remember the cost function and the hard constraints can be replaced by soft functions
     obj = 0
     for i in range(N):
         state_error = opt_states[i, :]
-        obj += ca.mtimes([state_error, Q, state_error.T])
-    state_error_final = opt_states[N, :]
-    obj += ca.mtimes([state_error_final, P, state_error_final.T])
+        action_error = opt_controls[i,0]
+        obj += ca.mtimes([state_error, Q, state_error.T])+ca.mtimes([action_error,R,action_error.T])
 
-    for i in range(N+1):
-        soft_obj_rdx=1/(ca.exp(acc_states[i, 0]-rdx_min)**2) # soft function for min stopping distance
+    for i in range(N):
+        soft_obj_rdx=(ca.exp(rdx_min-acc_states[i+1, 0])**2)/(ca.exp(acc_states[i+1, 0]-rdx_min)**2) # soft function for min stopping distance
         obj += soft_obj_rdx
 
     opti.minimize(obj)
@@ -190,9 +188,8 @@ if __name__ == "__main__":
     opti.subject_to(opti.bounded(u_min, a, u_max))
     opti.subject_to(opti.bounded(j_min, j, j_max))
 
-    # remember the cost function and the hard constraints can be replaced by soft functions
 
-    opts_setting = {'ipopt.max_iter': 20000,
+    opts_setting = {'ipopt.max_iter': 5000,
                     'ipopt.print_level': 0,
                     'print_time': 0,
                     'ipopt.acceptable_tol': 1e-8,
@@ -202,11 +199,7 @@ if __name__ == "__main__":
 
     current_state = np.array([rdx_min,0.0,0.0,0.0,0.0]) # initial acc state
     init_x_position=np.array([rdx_min,0.0]) # initial position
-    opt_controls0 = np.zeros((N, 1))  # initial optimized actions guess
-    init_states = np.tile(current_state, N + 1).reshape(N + 1, -1) # set the initial acc states
-    init_error=np.array([current_state[0]-h*current_state[2]-rdx_min,current_state[1]-current_state[2],current_state[3],current_state[4]])
-    init_errors = np.tile(init_error, N + 1).reshape(N + 1, -1)
-    no = accel_profile[0]  # initial acceleration of the front vehicle
+    ap = accel_profile[0,0]  # initial acceleration of the front vehicle
 
     # contains the history of the states and the actions
     rdx_h=[]
@@ -217,7 +210,7 @@ if __name__ == "__main__":
     a_h = []
     j_h = []
     u_h = []
-    no_h=[]
+    ap_h=[]
     rdx_h.append(current_state[0])
     vp_h.append(current_state[1])
     v_h.append(current_state[2])
@@ -225,11 +218,10 @@ if __name__ == "__main__":
     j_h.append(current_state[4])
     xp_h.append(init_x_position[0])
     x_h.append(init_x_position[1])
-    u_h.append(opt_controls0[0, 0])
-    no_h.append(no)
+    ap_h.append(ap)
     i=1
     # start MPC loop
-    while True:
+    while True and i<1000:
         #print(i)
         if show_animation and i % skip_frame == 0:
             plt.cla()
@@ -243,17 +235,12 @@ if __name__ == "__main__":
             plt.xlabel('X [m]')
             plt.ylabel('Y [m]')
             plt.title(
-                f'MPC ACC | Relative Distance:{current_rdx:.2f}m| Accel:{current_accel:.2f}m/s^2| Velocity:{current_velocity:.2f}m/s')
+                f'MPC ACC | Relative Distance:{current_rdx:.2f}m| Accel:{current_accel:.2f}m/s^2| Velocity:{current_velocity:.2f}m/s| headway:{(xp_h[-1]-x_h[-1]-rdx_min)/v_h[-1]:.2f}s')
             plt.pause(0.001)
 
         # set parameters which are the local reference trajectories, opti.set_value only works for an opti.parameter not an opti.variable
-        opti.set_value(front_accl_signal, no)
+        opti.set_value(front_accl_signal, ap)
         opti.set_value(init_acc_states, current_state)
-
-        # provide the initial guess of the optimization targets
-        opti.set_initial(opt_controls, opt_controls0.reshape(N, 1))
-        opti.set_initial(acc_states, init_states.reshape(N + 1, 5))
-        opti.set_initial(opt_states, init_errors.reshape(N + 1, 4))
 
         # solve the problem once again
         sol = opti.solve()
@@ -261,16 +248,11 @@ if __name__ == "__main__":
         u_res = sol.value(opt_controls)
         # print(u_res)
         u_h.append(u_res[0])
-        next_state,x_position = acc_transition(current_state, u_res[0],no,init_x_position)
-        no = accel_profile[i]  # initial acceleration of the front vehicle
+        next_state,x_position = acc_transition(current_state, u_res[0],ap,init_x_position)
+        ap = accel_profile[i,0]  # initial acceleration of the front vehicle
         i = i + 1
         init_x_position=x_position
         current_state = next_state
-        init_error = np.array(
-            [current_state[0] - h * current_state[2] - rdx_min, current_state[1] - current_state[2], current_state[3],
-             current_state[4]])
-        init_errors = np.tile(init_error, N + 1).reshape(N + 1, -1)
-        init_states = np.tile(current_state, N + 1).reshape(N + 1, -1)
         rdx_h.append(current_state[0])
         vp_h.append(current_state[1])
         v_h.append(current_state[2])
@@ -278,7 +260,7 @@ if __name__ == "__main__":
         j_h.append(current_state[4])
         xp_h.append(x_position[0])
         x_h.append(x_position[1])
-        no_h.append(no)
+        ap_h.append(ap)
         if i == len(accel_profile) -1:
             break
 
@@ -304,7 +286,7 @@ if __name__ == "__main__":
 
     plt.figure(figsize=(10, 5))
     plt.plot(time_axis, a_h, 'g-', label=f'Ego-vehicle Acceleration,RMS:{np.sqrt(np.mean(np.array(a_h)**2)):.2f}m/s^2')
-    plt.plot(time_axis, no_h, 'k--',  label=f'Front vehicle Acceleration,RMS:{np.sqrt(np.mean(np.array(no_h)**2)):.2f}m/s^2')
+    plt.plot(time_axis, ap_h, 'k--',  label=f'Front vehicle Acceleration,RMS:{np.sqrt(np.mean(np.array(ap_h)**2)):.2f}m/s^2')
     plt.grid(True)
     plt.title('Acceleration During Cruising')
     plt.ylabel('Acceleration [m/s^2]')
